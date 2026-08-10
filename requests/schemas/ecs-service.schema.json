@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://internal/platform/schemas/ecs-service.schema.json",
+  "title": "ecs-service request",
+  "description": "Inputs an app team supplies to deploy via modules/ecs-service. This mirrors that module's variables.tf and should be regenerated whenever the module's inputs change.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["module", "module_version", "name", "team", "environment"],
+  "properties": {
+    "module": {
+      "const": "ecs-service",
+      "description": "Must match the directory name under modules/ so CI knows which schema and which module source to use."
+    },
+    "module_version": {
+      "type": "string",
+      "description": "Exact git tag of the module to deploy, e.g. modules/ecs-service/v1.2.0. Floating refs (main, no tag) are rejected by CI.",
+      "pattern": "^modules/ecs-service/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Short, DNS-safe service name. Used to derive resource names.",
+      "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$"
+    },
+    "team": {
+      "type": "string",
+      "description": "Owning team slug, must match an entry in teams.yaml (checked separately in CI, not by this schema).",
+      "pattern": "^[a-z][a-z0-9-]{1,40}$"
+    },
+    "environment": {
+      "type": "string",
+      "description": "Deploy target. Drives the networking module's VPC/subnet lookup.",
+      "enum": ["dev", "staging", "prod"]
+    },
+    "tags": {
+      "type": "object",
+      "description": "Free-form extra tags merged on top of the platform-standard ones (name/team/environment are added automatically, don't repeat them here).",
+      "additionalProperties": { "type": "string" }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "port"],
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Full image reference including tag or digest. 'latest' is rejected by CI."
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "cpu": { "type": "integer", "enum": [256, 512, 1024, 2048, 4096], "default": 256 },
+        "memory_mb": { "type": "integer", "minimum": 512, "maximum": 30720, "default": 512 },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Plain (non-secret) environment variables. Use secrets_arn for anything sensitive."
+        },
+        "secrets_arn": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^arn:aws:secretsmanager:" },
+          "description": "ARNs of Secrets Manager secrets to inject as env vars. Never put secret values directly in the request."
+        }
+      }
+    },
+    "scaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_count": { "type": "integer", "minimum": 0, "default": 1 },
+        "max_count": { "type": "integer", "minimum": 1, "default": 3 },
+        "target_cpu_percent": { "type": "integer", "minimum": 1, "maximum": 100, "default": 60 }
+      }
+    },
+    "iam_addons": {
+      "type": "array",
+      "description": "Pre-approved permission add-ons to attach to the task role. Must come from the platform's published catalog (modules/_shared/iam-addons) — arbitrary policy JSON is not accepted here by design.",
+      "items": {
+        "type": "string",
+        "enum": ["s3-read", "s3-write", "sqs-send", "sqs-receive", "sns-publish", "dynamodb-read", "dynamodb-write", "secrets-read"]
+      },
+      "uniqueItems": true
+    },
+    "public": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the service gets an internet-facing ALB listener vs internal-only."
+    }
+  }
+}
