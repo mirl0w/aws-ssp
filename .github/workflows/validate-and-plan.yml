@@ -1,0 +1,94 @@
+name: Validate & Plan Request
+
+# Runs on any PR that touches requests/. Never runs on modules/ changes —
+# those go through a separate, more heavily-reviewed workflow since they're
+# where actual AWS resources get hand-written.
+on:
+  pull_request:
+    paths:
+      - "requests/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      files: ${{ steps.diff.outputs.files }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          FILES=$(git diff --name-only origin/${{ github.base_ref }} -- 'requests/**/*.yaml' 'requests/**/*.yml' | tr '\n' ' ')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+  schema-validate:
+    needs: changed-files
+    if: needs.changed-files.outputs.files != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml jsonschema
+      - run: python3 scripts/validate_requests.py ${{ needs.changed-files.outputs.files }}
+
+  # One job per module type keeps blast radius small and lets teams see a
+  # plan for exactly the app they touched, not an unrelated diff.
+  terraform-plan:
+    needs: [changed-files, schema-validate]
+    if: needs.changed-files.outputs.files != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+
+      # Renders each changed request into a throwaway root module that pins
+      # the exact module_version from the request file, so `plan` reflects
+      # reality instead of whatever's on main.
+      - name: Render plan roots
+        run: python3 scripts/render_plan_roots.py ${{ needs.changed-files.outputs.files }}
+
+      - name: Terraform init & plan
+        id: plan
+        run: |
+          set -euo pipefail
+          for dir in .render/*/; do
+            echo "## Plan: $dir" >> plan-output.md
+            (cd "$dir" && terraform init -input=false -backend=false -no-color \
+              && terraform plan -input=false -no-color) >> plan-output.md 2>&1 || true
+            echo '```' >> plan-output.md
+          done
+
+      - name: Post plan as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('plan-output.md', 'utf8').slice(0, 60000);
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `### Terraform Plan\n\n${body}\n\n_Auto-generated — re-run by pushing a new commit._`
+            });
+
+  # Placeholder for the policy-as-code gate (OPA/conftest). Wire this up to
+  # deny things like: prod requests without 2 approvals, iam_addons outside
+  # the published catalog, missing cost-center tag, etc.
+  policy-gate:
+    needs: [changed-files, terraform-plan]
+    if: needs.changed-files.outputs.files != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run OPA policy checks
+        run: echo "TODO: conftest test .render/*/plan.json -p policy/"
