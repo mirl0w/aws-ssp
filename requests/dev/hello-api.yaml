@@ -1,0 +1,32 @@
+# requests/dev/hello-api.yaml
+# Opened as a PR by the app team. Never touches modules/ or the AWS console.
+module: ecs-service
+module_version: modules/ecs-service/v1.2.0
+
+name: hello-api
+team: payments
+environment: dev
+
+tags:
+  cost-center: "CC-4021"
+
+container:
+  image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/hello-api:2026-08-09-a1b2c3d
+  port: 8080
+  cpu: 256
+  memory_mb: 512
+  env:
+    LOG_LEVEL: info
+  secrets_arn:
+    - arn:aws:secretsmanager:us-east-1:123456789012:secret:hello-api/db-DPQR12
+
+scaling:
+  min_count: 1
+  max_count: 2
+  target_cpu_percent: 60
+
+iam_addons:
+  - s3-read
+  - secrets-read
+
+public: true
